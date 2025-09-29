@@ -19,5 +19,15 @@
     "express": "^5.1.0",
     "googleapis": "^160.0.0",
     "nodemon": "^3.1.10"
-  }
+  },
+  "devDependencies": {},
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/jrmmllrs/dental-backend.git"
+  },
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/jrmmllrs/dental-backend/issues"
+  },
+  "homepage": "https://github.com/jrmmllrs/dental-backend#readme"
 }
