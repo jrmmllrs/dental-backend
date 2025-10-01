@@ -792,7 +792,20 @@ app.get("/api/appointments/slots/:date", async (req, res) => {
 
       const events = response.data.items || [];
       const bookedSlots = events
-        .filter((event) => event.start.dateTime)
+        .filter((event) => {
+          // Only count slots with dateTime (not all-day events)
+          if (!event.start.dateTime) return false;
+
+          // Exclude declined appointments from booked slots
+          const summary = (event.summary || "").toLowerCase();
+          const description = (event.description || "").toLowerCase();
+
+          // Check if event is declined
+          if (summary.includes("[declined]")) return false;
+          if (description.includes("status: declined")) return false;
+
+          return true;
+        })
         .map((event) => {
           const startTime = new Date(event.start.dateTime);
           return startTime.toLocaleTimeString("en-US", {
