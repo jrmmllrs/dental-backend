@@ -888,19 +888,21 @@ app.get("/api/debug/status", async (req, res) => {
 });
 
 // Start server
-const PORT = process.env.PORT || 4000;
-app.listen(PORT, async () => {
-  console.log("\n" + "=".repeat(60));
-  console.log(`Server: http://localhost:${PORT}`);
-  console.log("=".repeat(60));
+// const PORT = process.env.PORT || 4000;
+// app.listen(PORT, async () => {
+//   console.log("\n" + "=".repeat(60));
+//   console.log(`Server: http://localhost:${PORT}`);
+//   console.log("=".repeat(60));
 
-  if (await loadSharedCalendarTokensFromDB()) {
-    console.log("\n✅ Shared calendar ready (loaded from Supabase)");
-  } else {
-    console.log("\n⚠️  Admin login required");
-    console.log(`   Admins: ${ADMIN_EMAILS.join(", ")}`);
-  }
+//   if (await loadSharedCalendarTokensFromDB()) {
+//     console.log("\n✅ Shared calendar ready (loaded from Supabase)");
+//   } else {
+//     console.log("\n⚠️  Admin login required");
+//     console.log(`   Admins: ${ADMIN_EMAILS.join(", ")}`);
+//   }
 
-  console.log("\nDebug: http://localhost:4000/api/debug/status");
-  console.log("=".repeat(60) + "\n");
-});
+//   console.log("\nDebug: http://localhost:4000/api/debug/status");
+//   console.log("=".repeat(60) + "\n");
+// });
+
+module.exports = app;
