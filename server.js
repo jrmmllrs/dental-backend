@@ -18,14 +18,6 @@ app.use(
   })
 );
 
-app.use(cookieParser());
-app.use(
-  cors({
-    origin: "https://dental-frontend-six-kappa.vercel.app",
-    credentials: true,
-  })
-);
-
 
 // Import Supabase token storage
 const {
@@ -51,12 +43,7 @@ let sharedCalendarTokens = null;
 let sharedCalendarClient = null;
 
 // Middleware
-app.use(
-  cors({
-    origin: process.env.CLIENT_ORIGIN || "http://localhost:5173",
-    credentials: true,
-  })
-);
+
 app.use(cookieParser());
 app.use(bodyParser.json());
 
@@ -117,6 +104,12 @@ async function refreshTokensIfNeeded(client, tokens) {
     return null;
   }
 }
+
+const {
+  loadSharedCalendarTokens,
+  saveSharedCalendarTokens,
+} = require("./supabase-token-storage");
+
 
 // Helper: Load saved tokens from Supabase
 async function loadSharedCalendarTokensFromDB() {
