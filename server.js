@@ -65,6 +65,12 @@ const isUserAdmin = (email) => {
 // Helper: Refresh tokens if needed
 async function refreshTokensIfNeeded(client, tokens) {
   try {
+    // Check if we have a refresh token
+    if (!tokens.refresh_token) {
+      console.error("❌ No refresh token available");
+      return null;
+    }
+
     // Check if token is expired or will expire soon
     const now = Date.now();
     const expiryDate = tokens.expiry_date || 0;
@@ -72,14 +78,27 @@ async function refreshTokensIfNeeded(client, tokens) {
     // Refresh if expired or expiring in next 5 minutes
     if (expiryDate - now < 5 * 60 * 1000) {
       console.log("🔄 Refreshing expired token...");
+
+      // Set the credentials first (needed for refresh)
+      client.setCredentials(tokens);
+
       const { credentials } = await client.refreshAccessToken();
+
+      // Preserve the refresh token if it wasn't returned
+      if (!credentials.refresh_token && tokens.refresh_token) {
+        credentials.refresh_token = tokens.refresh_token;
+      }
+
+      console.log("✅ Token refreshed successfully");
       return credentials;
     }
 
     return tokens;
   } catch (err) {
-    console.error("Token refresh error:", err.message);
-    throw err;
+    console.error("❌ Token refresh error:", err.message);
+
+    // If refresh fails, return null to force re-authentication
+    return null;
   }
 }
 
@@ -91,22 +110,36 @@ async function loadSharedCalendarTokens() {
       const saved = JSON.parse(data);
 
       if (saved.tokens && saved.tokens.access_token) {
-        sharedCalendarTokens = saved.tokens;
+        console.log(`📂 Loading tokens for ${saved.userEmail}...`);
+
+        // Set credentials
         sharedOAuth2Client.setCredentials(saved.tokens);
+        sharedCalendarTokens = saved.tokens;
 
         // Try to refresh if needed
-        try {
-          const refreshed = await refreshTokensIfNeeded(
-            sharedOAuth2Client,
-            saved.tokens
+        const refreshed = await refreshTokensIfNeeded(
+          sharedOAuth2Client,
+          saved.tokens
+        );
+
+        if (refreshed === null) {
+          // Refresh failed - clear everything
+          console.error(
+            "❌ Token refresh failed. Admin needs to re-authenticate."
           );
-          if (refreshed !== saved.tokens) {
-            sharedCalendarTokens = refreshed;
-            sharedOAuth2Client.setCredentials(refreshed);
-            saveSharedCalendarTokens(refreshed, saved.userEmail);
-          }
-        } catch (refreshErr) {
-          console.error("Could not refresh tokens:", refreshErr.message);
+          sharedCalendarTokens = null;
+          sharedCalendarClient = null;
+
+          // Optionally delete the invalid token file
+          fs.unlinkSync(TOKENS_FILE);
+
+          return false;
+        } else if (refreshed !== saved.tokens) {
+          // Token was refreshed - update
+          console.log("✅ Tokens refreshed and saved");
+          sharedCalendarTokens = refreshed;
+          sharedOAuth2Client.setCredentials(refreshed);
+          saveSharedCalendarTokens(refreshed, saved.userEmail);
         }
 
         sharedCalendarClient = google.calendar({
@@ -119,11 +152,10 @@ async function loadSharedCalendarTokens() {
       }
     }
   } catch (err) {
-    console.error("Error loading tokens:", err.message);
+    console.error("❌ Error loading tokens:", err.message);
   }
   return false;
 }
-
 // Helper: Save tokens
 function saveSharedCalendarTokens(tokens, userEmail) {
   try {
@@ -192,7 +224,17 @@ async function getSharedCalendarClient() {
       sharedOAuth2Client,
       sharedCalendarTokens
     );
-    if (refreshed !== sharedCalendarTokens) {
+
+    if (refreshed === null) {
+      // Refresh failed - clear everything
+      console.error(
+        "❌ Shared calendar tokens invalid. Admin must re-authenticate."
+      );
+      sharedCalendarTokens = null;
+      sharedCalendarClient = null;
+      return null;
+    } else if (refreshed !== sharedCalendarTokens) {
+      // Update with refreshed tokens
       sharedCalendarTokens = refreshed;
       sharedOAuth2Client.setCredentials(refreshed);
 
@@ -202,13 +244,13 @@ async function getSharedCalendarClient() {
         const saved = JSON.parse(data);
         saveSharedCalendarTokens(refreshed, saved.userEmail);
       } catch (err) {
-        console.error("Could not save refreshed tokens:", err.message);
+        console.error("⚠️  Could not save refreshed tokens:", err.message);
       }
     }
 
     return sharedCalendarClient;
   } catch (err) {
-    console.error("Error accessing shared calendar:", err.message);
+    console.error("❌ Error accessing shared calendar:", err.message);
     return null;
   }
 }
