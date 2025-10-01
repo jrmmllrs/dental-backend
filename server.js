@@ -6,8 +6,6 @@ const cookieParser = require("cookie-parser");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 
-const cors = require("cors");
-
 app.use(
   cors({
     origin: [
@@ -104,11 +102,6 @@ async function refreshTokensIfNeeded(client, tokens) {
     return null;
   }
 }
-
-const {
-  loadSharedCalendarTokens,
-  saveSharedCalendarTokens,
-} = require("./supabase-token-storage");
 
 
 // Helper: Load saved tokens from Supabase
