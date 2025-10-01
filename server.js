@@ -18,6 +18,15 @@ app.use(
   })
 );
 
+app.use(cookieParser());
+app.use(
+  cors({
+    origin: "https://dental-frontend-six-kappa.vercel.app",
+    credentials: true,
+  })
+);
+
+
 // Import Supabase token storage
 const {
   loadSharedCalendarTokens,
