@@ -1,12 +1,16 @@
-// server.js - Fixed with Token Refresh
+// server.js - With Supabase Token Storage
 require("dotenv").config();
 const express = require("express");
 const { google } = require("googleapis");
 const cookieParser = require("cookie-parser");
 const bodyParser = require("body-parser");
 const cors = require("cors");
-const fs = require("fs");
-const path = require("path");
+
+// Import Supabase token storage
+const {
+  loadSharedCalendarTokens,
+  saveSharedCalendarTokens,
+} = require('./supabase-token-storage');
 
 const app = express();
 
@@ -20,9 +24,8 @@ const ADMIN_EMAILS = [
 // Shared calendar configuration
 const SHARED_CALENDAR_ID =
   "f35ef0ed2691595932ffe57ccb43470d2c1115d1783b09ecb167aaec14d29681@group.calendar.google.com";
-const TOKENS_FILE = path.join(__dirname, "shared-calendar-tokens.json");
 
-// Store credentials
+// Store credentials in memory
 let sharedCalendarTokens = null;
 let sharedCalendarClient = null;
 
@@ -65,26 +68,20 @@ const isUserAdmin = (email) => {
 // Helper: Refresh tokens if needed
 async function refreshTokensIfNeeded(client, tokens) {
   try {
-    // Check if we have a refresh token
     if (!tokens.refresh_token) {
       console.error("❌ No refresh token available");
       return null;
     }
 
-    // Check if token is expired or will expire soon
     const now = Date.now();
     const expiryDate = tokens.expiry_date || 0;
 
-    // Refresh if expired or expiring in next 5 minutes
     if (expiryDate - now < 5 * 60 * 1000) {
       console.log("🔄 Refreshing expired token...");
-
-      // Set the credentials first (needed for refresh)
       client.setCredentials(tokens);
 
       const { credentials } = await client.refreshAccessToken();
 
-      // Preserve the refresh token if it wasn't returned
       if (!credentials.refresh_token && tokens.refresh_token) {
         credentials.refresh_token = tokens.refresh_token;
       }
@@ -96,79 +93,50 @@ async function refreshTokensIfNeeded(client, tokens) {
     return tokens;
   } catch (err) {
     console.error("❌ Token refresh error:", err.message);
-
-    // If refresh fails, return null to force re-authentication
     return null;
   }
 }
 
-// Helper: Load saved tokens
-async function loadSharedCalendarTokens() {
+// Helper: Load saved tokens from Supabase
+async function loadSharedCalendarTokensFromDB() {
   try {
-    if (fs.existsSync(TOKENS_FILE)) {
-      const data = fs.readFileSync(TOKENS_FILE, "utf8");
-      const saved = JSON.parse(data);
+    const saved = await loadSharedCalendarTokens();
 
-      if (saved.tokens && saved.tokens.access_token) {
-        console.log(`📂 Loading tokens for ${saved.userEmail}...`);
+    if (saved && saved.tokens && saved.tokens.access_token) {
+      console.log(`📂 Loading tokens for ${saved.userEmail}...`);
 
-        // Set credentials
-        sharedOAuth2Client.setCredentials(saved.tokens);
-        sharedCalendarTokens = saved.tokens;
+      sharedOAuth2Client.setCredentials(saved.tokens);
+      sharedCalendarTokens = saved.tokens;
 
-        // Try to refresh if needed
-        const refreshed = await refreshTokensIfNeeded(
-          sharedOAuth2Client,
-          saved.tokens
-        );
+      const refreshed = await refreshTokensIfNeeded(
+        sharedOAuth2Client,
+        saved.tokens
+      );
 
-        if (refreshed === null) {
-          // Refresh failed - clear everything
-          console.error(
-            "❌ Token refresh failed. Admin needs to re-authenticate."
-          );
-          sharedCalendarTokens = null;
-          sharedCalendarClient = null;
-
-          // Optionally delete the invalid token file
-          fs.unlinkSync(TOKENS_FILE);
-
-          return false;
-        } else if (refreshed !== saved.tokens) {
-          // Token was refreshed - update
-          console.log("✅ Tokens refreshed and saved");
-          sharedCalendarTokens = refreshed;
-          sharedOAuth2Client.setCredentials(refreshed);
-          saveSharedCalendarTokens(refreshed, saved.userEmail);
-        }
-
-        sharedCalendarClient = google.calendar({
-          version: "v3",
-          auth: sharedOAuth2Client,
-        });
-
-        console.log(`✅ Shared calendar loaded (Admin: ${saved.userEmail})`);
-        return true;
+      if (refreshed === null) {
+        console.error("❌ Token refresh failed. Admin needs to re-authenticate.");
+        sharedCalendarTokens = null;
+        sharedCalendarClient = null;
+        return false;
+      } else if (refreshed !== saved.tokens) {
+        console.log("✅ Tokens refreshed and saved to Supabase");
+        sharedCalendarTokens = refreshed;
+        sharedOAuth2Client.setCredentials(refreshed);
+        await saveSharedCalendarTokens(refreshed, saved.userEmail);
       }
+
+      sharedCalendarClient = google.calendar({
+        version: "v3",
+        auth: sharedOAuth2Client,
+      });
+
+      console.log(`✅ Shared calendar loaded (Admin: ${saved.userEmail})`);
+      return true;
     }
   } catch (err) {
     console.error("❌ Error loading tokens:", err.message);
   }
   return false;
-}
-// Helper: Save tokens
-function saveSharedCalendarTokens(tokens, userEmail) {
-  try {
-    const data = {
-      tokens,
-      userEmail,
-      savedAt: new Date().toISOString(),
-    };
-    fs.writeFileSync(TOKENS_FILE, JSON.stringify(data, null, 2));
-    console.log(`✅ Tokens saved for ${userEmail}`);
-  } catch (err) {
-    console.error("Error saving tokens:", err.message);
-  }
 }
 
 // Helper: Set credentials from cookies
@@ -178,12 +146,10 @@ async function setCredentialsFromCookies(req) {
   try {
     const tokens = JSON.parse(cookie);
 
-    // Try to refresh if needed
     try {
       const refreshed = await refreshTokensIfNeeded(oauth2Client, tokens);
       if (refreshed !== tokens) {
         oauth2Client.setCredentials(refreshed);
-        // Update cookie with new tokens
         return refreshed;
       }
     } catch (refreshErr) {
@@ -219,30 +185,26 @@ async function getSharedCalendarClient() {
   }
 
   try {
-    // Try to refresh tokens if needed
     const refreshed = await refreshTokensIfNeeded(
       sharedOAuth2Client,
       sharedCalendarTokens
     );
 
     if (refreshed === null) {
-      // Refresh failed - clear everything
-      console.error(
-        "❌ Shared calendar tokens invalid. Admin must re-authenticate."
-      );
+      console.error("❌ Shared calendar tokens invalid. Admin must re-authenticate.");
       sharedCalendarTokens = null;
       sharedCalendarClient = null;
       return null;
     } else if (refreshed !== sharedCalendarTokens) {
-      // Update with refreshed tokens
       sharedCalendarTokens = refreshed;
       sharedOAuth2Client.setCredentials(refreshed);
 
-      // Save refreshed tokens
+      // Save refreshed tokens to Supabase
       try {
-        const data = fs.readFileSync(TOKENS_FILE, "utf8");
-        const saved = JSON.parse(data);
-        saveSharedCalendarTokens(refreshed, saved.userEmail);
+        const saved = await loadSharedCalendarTokens();
+        if (saved && saved.userEmail) {
+          await saveSharedCalendarTokens(refreshed, saved.userEmail);
+        }
       } catch (err) {
         console.error("⚠️  Could not save refreshed tokens:", err.message);
       }
@@ -259,12 +221,10 @@ async function getSharedCalendarClient() {
 function convertTo24Hour(time12h) {
   if (!time12h) return "09:00";
 
-  // If already in 24-hour format, return as is
   if (/^\d{2}:\d{2}$/.test(time12h)) {
     return time12h;
   }
 
-  // Handle 12-hour format
   const [time, modifier] = time12h.trim().split(" ");
   let [hours, minutes] = time.split(":");
 
@@ -281,7 +241,6 @@ function convertTo24Hour(time12h) {
 
 // Helper: Format appointment
 function formatAppointmentForCalendar(appointment, bookedByEmail) {
-  // Convert time to 24-hour format before creating Date
   const time24 = convertTo24Hour(appointment.time);
   const startDateTime = new Date(`${appointment.date}T${time24}:00`);
   const endDateTime = new Date(startDateTime.getTime() + 30 * 60 * 1000);
@@ -367,13 +326,15 @@ app.get("/oauth2callback", async (req, res) => {
         version: "v3",
         auth: sharedOAuth2Client,
       });
-      saveSharedCalendarTokens(tokens, userEmail);
-      console.log("✅ Shared calendar initialized");
+      
+      // Save to Supabase
+      await saveSharedCalendarTokens(tokens, userEmail);
+      console.log("✅ Shared calendar initialized and saved to Supabase");
     }
 
     res.cookie("tokens", JSON.stringify(tokens), {
       httpOnly: true,
-      secure: false,
+      secure: process.env.NODE_ENV === 'production',
       maxAge: 7 * 24 * 60 * 60 * 1000,
       sameSite: "lax",
     });
@@ -404,11 +365,10 @@ app.get("/api/me", async (req, res) => {
       return res.json({ authenticated: false });
     }
 
-    // Update cookie if tokens were refreshed
     if (typeof refreshedTokens === "object") {
       res.cookie("tokens", JSON.stringify(refreshedTokens), {
         httpOnly: true,
-        secure: false,
+        secure: process.env.NODE_ENV === 'production',
         maxAge: 7 * 24 * 60 * 60 * 1000,
         sameSite: "lax",
       });
@@ -442,8 +402,7 @@ app.get("/api/appointments", async (req, res) => {
     if (!calendar) {
       return res.status(503).json({
         error: "Shared calendar not available",
-        message:
-          "Please ensure an admin has authenticated to enable shared calendar access",
+        message: "Please ensure an admin has authenticated to enable shared calendar access",
       });
     }
 
@@ -586,8 +545,7 @@ app.post("/api/appointments", async (req, res) => {
     if (!calendar) {
       return res.status(503).json({
         error: "Cannot create appointment",
-        message:
-          "Shared calendar not available. Please contact an administrator.",
+        message: "Shared calendar not available. Please contact an administrator.",
       });
     }
 
@@ -780,7 +738,7 @@ app.delete("/api/appointments/:id", async (req, res) => {
   }
 });
 
-// 8. Get available slots
+// 9. Get available slots
 app.get("/api/appointments/slots/:date", async (req, res) => {
   try {
     const refreshedTokens = await setCredentialsFromCookies(req);
@@ -797,20 +755,9 @@ app.get("/api/appointments/slots/:date", async (req, res) => {
 
     const calendar = await getSharedCalendarClient();
     if (!calendar) {
-      // Return default slots even if calendar unavailable
       const allSlots = [
-        "09:00",
-        "09:30",
-        "10:00",
-        "10:30",
-        "11:00",
-        "11:30",
-        "14:00",
-        "14:30",
-        "15:00",
-        "15:30",
-        "16:00",
-        "16:30",
+        "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
+        "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
       ];
 
       return res.json({
@@ -835,14 +782,11 @@ app.get("/api/appointments/slots/:date", async (req, res) => {
       const events = response.data.items || [];
       const bookedSlots = events
         .filter((event) => {
-          // Only count slots with dateTime (not all-day events)
           if (!event.start.dateTime) return false;
 
-          // Exclude declined appointments from booked slots
           const summary = (event.summary || "").toLowerCase();
           const description = (event.description || "").toLowerCase();
 
-          // Check if event is declined
           if (summary.includes("[declined]")) return false;
           if (description.includes("status: declined")) return false;
 
@@ -858,18 +802,8 @@ app.get("/api/appointments/slots/:date", async (req, res) => {
         });
 
       const allSlots = [
-        "09:00",
-        "09:30",
-        "10:00",
-        "10:30",
-        "11:00",
-        "11:30",
-        "14:00",
-        "14:30",
-        "15:00",
-        "15:30",
-        "16:00",
-        "16:30",
+        "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
+        "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
       ];
 
       const availableSlots = allSlots.filter(
@@ -884,20 +818,9 @@ app.get("/api/appointments/slots/:date", async (req, res) => {
     } catch (calendarError) {
       console.error("Slots error:", calendarError.message);
 
-      // Return all slots if calendar error
       const allSlots = [
-        "09:00",
-        "09:30",
-        "10:00",
-        "10:30",
-        "11:00",
-        "11:30",
-        "14:00",
-        "14:30",
-        "15:00",
-        "15:30",
-        "16:00",
-        "16:30",
+        "09:00", "09:30", "10:00", "10:30", "11:00", "11:30",
+        "14:00", "14:30", "15:00", "15:30", "16:00", "16:30",
       ];
 
       res.json({
@@ -913,7 +836,7 @@ app.get("/api/appointments/slots/:date", async (req, res) => {
   }
 });
 
-// 9. Calendar status
+// 10. Calendar status
 app.get("/api/calendar/status", async (req, res) => {
   res.json({
     sharedCalendarConfigured: !!sharedCalendarTokens,
@@ -925,37 +848,43 @@ app.get("/api/calendar/status", async (req, res) => {
   });
 });
 
-// 10. Debug endpoint
-app.get("/api/debug/status", (req, res) => {
-  const fileExists = fs.existsSync(TOKENS_FILE);
-  let fileData = null;
-
-  if (fileExists) {
-    try {
-      const content = fs.readFileSync(TOKENS_FILE, "utf8");
-      fileData = JSON.parse(content);
-    } catch (err) {
-      fileData = { error: err.message };
-    }
+// 11. Debug endpoint
+app.get("/api/debug/status", async (req, res) => {
+  try {
+    const tokenData = await loadSharedCalendarTokens();
+    
+    res.json({
+      supabase: {
+        connected: true,
+        hasData: !!tokenData,
+        userEmail: tokenData?.userEmail || null,
+        savedAt: tokenData?.savedAt || null,
+      },
+      memory: {
+        hasTokens: !!sharedCalendarTokens,
+        hasClient: !!sharedCalendarClient,
+      },
+      config: {
+        calendarId: SHARED_CALENDAR_ID,
+        adminEmails: ADMIN_EMAILS,
+      },
+    });
+  } catch (err) {
+    res.json({
+      supabase: {
+        connected: false,
+        error: err.message,
+      },
+      memory: {
+        hasTokens: !!sharedCalendarTokens,
+        hasClient: !!sharedCalendarClient,
+      },
+      config: {
+        calendarId: SHARED_CALENDAR_ID,
+        adminEmails: ADMIN_EMAILS,
+      },
+    });
   }
-
-  res.json({
-    tokenFile: {
-      exists: fileExists,
-      path: TOKENS_FILE,
-      hasData: !!fileData,
-      userEmail: fileData?.userEmail || null,
-      savedAt: fileData?.savedAt || null,
-    },
-    memory: {
-      hasTokens: !!sharedCalendarTokens,
-      hasClient: !!sharedCalendarClient,
-    },
-    config: {
-      calendarId: SHARED_CALENDAR_ID,
-      adminEmails: ADMIN_EMAILS,
-    },
-  });
 });
 
 // Start server
@@ -965,8 +894,8 @@ app.listen(PORT, async () => {
   console.log(`Server: http://localhost:${PORT}`);
   console.log("=".repeat(60));
 
-  if (await loadSharedCalendarTokens()) {
-    console.log("\n✅ Shared calendar ready");
+  if (await loadSharedCalendarTokensFromDB()) {
+    console.log("\n✅ Shared calendar ready (loaded from Supabase)");
   } else {
     console.log("\n⚠️  Admin login required");
     console.log(`   Admins: ${ADMIN_EMAILS.join(", ")}`);
