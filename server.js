@@ -300,7 +300,7 @@ ${appointment.notes ? `Notes: ${appointment.notes}` : ""}
 }
 
 // 1. Get OAuth URL
-app.get("/auth/url", (req, res) => {
+app.get("api/auth/url", (req, res) => {
   try {
     const url = oauth2Client.generateAuthUrl({
       access_type: "offline",
