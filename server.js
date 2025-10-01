@@ -6,6 +6,18 @@ const cookieParser = require("cookie-parser");
 const bodyParser = require("body-parser");
 const cors = require("cors");
 
+const cors = require("cors");
+
+app.use(
+  cors({
+    origin: [
+      "http://localhost:5173", // local dev
+      "https://dental-frontend-six-kappa.vercel.app", // production frontend
+    ],
+    credentials: true,
+  })
+);
+
 // Import Supabase token storage
 const {
   loadSharedCalendarTokens,
